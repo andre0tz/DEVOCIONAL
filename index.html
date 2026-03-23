@@ -723,14 +723,12 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
 .login-skip:hover{color:var(--t2);}
 </style>
 
-<!-- Firebase SDK -->
-<script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut }
-    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { getFirestore, doc, setDoc, getDoc, onSnapshot }
-    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script>
+(function(){
   const firebaseConfig = {
     apiKey: "AIzaSyDIXZhQOmYFzHaIYM1XhfL81NzsZw-070g",
     authDomain: "devocional-28ce9.firebaseapp.com",
@@ -740,69 +738,72 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
     appId: "1:309533858208:web:1125862bf656522f4eacc5"
   };
 
-  const app   = initializeApp(firebaseConfig);
-  const auth  = getAuth(app);
-  const db    = getFirestore(app);
+  firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db   = firebase.firestore();
   let currentUID = null;
-  let unsubscribeSnapshot = null;
 
-  // ── Exponer funciones al scope global ──
-  window._fbSignIn = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-    } catch(e) { console.error('Login error:', e); }
+  window._fbSignIn = function() {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    auth.signInWithPopup(provider).catch(function(e){ console.error('Login error:',e); });
   };
 
-  window._fbSignOut = async () => {
-    if(unsubscribeSnapshot) unsubscribeSnapshot();
-    await signOut(auth);
-    currentUID = null;
-    window._updateAuthUI(null);
+  window._fbSignOut = function() {
+    auth.signOut().then(function(){
+      currentUID = null;
+      if(window._updateAuthUI) window._updateAuthUI(null);
+    });
   };
 
-  window._fbSave = async (data) => {
+  window._fbSave = function(data) {
     if(!currentUID) return;
-    try {
-      // Plan is too large — save only status/notes/time, not full structure
-      const planLight = data.plan ? data.plan.map(p=>({
-        idx:p.idx, status:p.status, time:p.time||0,
-        notes:p.notes||{}, vicFall:p.vicFall||null
-      })) : [];
-      await setDoc(doc(db,'usuarios',currentUID), {
-        ...data,
-        plan: planLight,
-        updatedAt: new Date().toISOString()
-      });
-    } catch(e) { console.error('Save error:', e); }
+    var planLight = (data.plan||[]).map(function(p){
+      return {idx:p.idx, status:p.status, time:p.time||0, notes:p.notes||{}, vicFall:p.vicFall||null};
+    });
+    var toSave = {
+      prayers:   data.prayers   || [],
+      gratitud:  data.gratitud  || [],
+      momentos:  data.momentos  || [],
+      metas:     data.metas     || [],
+      victorias: data.victorias || [],
+      ayunos:    data.ayunos    || [],
+      moodLog:   data.moodLog   || [],
+      missions:  data.missions  || {},
+      chDone:    data.chDone    || {},
+      commitChecks: data.commitChecks || {},
+      purity:    data.purity    || 0,
+      xp:        data.xp        || 0,
+      vic:       data.vic       || 0,
+      falls:     data.falls     || 0,
+      word:      data.word      || 'FE',
+      ayunoA:    data.ayunoA    || null,
+      plan:      planLight,
+      updatedAt: new Date().toISOString()
+    };
+    db.collection('usuarios').doc(currentUID).set(toSave)
+      .then(function(){ if(window.showSyncIndicator) window.showSyncIndicator(); })
+      .catch(function(e){ console.error('Firestore save error:',e); });
   };
 
-  // ── Auth state listener ──
-  onAuthStateChanged(auth, async (user) => {
+  auth.onAuthStateChanged(function(user) {
     if(user) {
       currentUID = user.uid;
-      window._updateAuthUI(user);
-      // Load data from Firestore
-      const ref = doc(db,'usuarios',currentUID);
-      const snap = await getDoc(ref);
-      if(snap.exists()) {
-        window._fbLoadData(snap.data());
-      } else {
-        // First time — save current local data to cloud
-        window._fbSave(window._getS());
-      }
-      // Real-time listener
-      if(unsubscribeSnapshot) unsubscribeSnapshot();
-      unsubscribeSnapshot = onSnapshot(ref, (docSnap) => {
-        if(docSnap.exists() && docSnap.metadata.hasPendingWrites === false) {
-          // Only update if change came from another device
+      if(window._updateAuthUI) window._updateAuthUI(user);
+      // Load or create document
+      db.collection('usuarios').doc(currentUID).get().then(function(snap){
+        if(snap.exists) {
+          if(window._fbLoadData) window._fbLoadData(snap.data());
+        } else {
+          // First login — upload local data
+          if(window._getS) window._fbSave(window._getS());
         }
-      });
+      }).catch(function(e){ console.error('Firestore load error:',e); });
     } else {
       currentUID = null;
-      window._updateAuthUI(null);
+      if(window._updateAuthUI) window._updateAuthUI(null);
     }
   });
+})();
 </script>
 </head>
 <body>
