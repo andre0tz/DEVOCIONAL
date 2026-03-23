@@ -1361,14 +1361,17 @@ window._fbLoadData = (data)=>{
 window._updateAuthUI = (user)=>{
   const lo=document.getElementById('auth-logged-out');
   const li=document.getElementById('auth-logged-in');
+  const overlay=document.getElementById('login-overlay');
   if(user){
     if(lo) lo.style.display='none';
-    if(li){li.style.display='flex';}
+    if(li) li.style.display='flex';
     const av=document.getElementById('auth-avatar');
     const nm=document.getElementById('auth-name');
     if(av&&user.photoURL) av.src=user.photoURL;
     if(nm) nm.textContent=user.displayName||user.email||'Usuario';
-    document.getElementById('login-overlay').classList.remove('show');
+    // Always close overlay when logged in
+    if(overlay) overlay.classList.remove('show');
+    localStorage.setItem('fb_skipped','1');
     toast('✅ Sesión iniciada — datos sincronizados','success');
   } else {
     if(lo) lo.style.display='flex';
@@ -1701,12 +1704,17 @@ document.addEventListener('DOMContentLoaded',()=>{
   const md=document.getElementById('moment-date');if(md)md.value=new Date().toISOString().split('T')[0];
   updateClock();setInterval(updateClock,1000);
   updateTopXP();renderNotifs();renderDash();
-  // Show login overlay if never logged in before
+  // Show login overlay only if not logged in after 2 seconds
+  // Firebase will call _updateAuthUI and close it automatically if logged in
   const hasAccount = localStorage.getItem('fb_skipped');
   if(!hasAccount){
     setTimeout(()=>{
-      document.getElementById('login-overlay').classList.add('show');
-    }, 1200);
+      // Only show if still not logged in
+      const li=document.getElementById('auth-logged-in');
+      if(!li || li.style.display==='none' || li.style.display===''){
+        document.getElementById('login-overlay').classList.add('show');
+      }
+    }, 2500);
   }
   // Auto-start session bar if today is in progress
 });
