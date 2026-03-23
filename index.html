@@ -707,8 +707,9 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
 .auth-btn:hover{background:var(--metal);}
 .auth-btn.out{background:transparent;color:var(--red);border:1px solid rgba(231,76,60,.35);}
 .auth-btn.out:hover{background:rgba(231,76,60,.08);}
-.sync-indicator{font-size:10px;color:var(--green);display:none;}
-.sync-indicator.show{display:inline;}
+.sync-indicator{font-size:10px;color:var(--green);display:none;transition:opacity .3s;}
+.sync-indicator.show{display:inline;animation:syncPulse 3s ease forwards;}
+@keyframes syncPulse{0%{opacity:1}80%{opacity:1}100%{opacity:0}}
 /* Login overlay */
 .login-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:2000;align-items:center;justify-content:center;}
 .login-overlay.show{display:flex;animation:fadeUp .3s ease;}
@@ -739,65 +740,100 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
   };
 
   firebase.initializeApp(firebaseConfig);
-  const auth = firebase.auth();
-  const db   = firebase.firestore();
-  let currentUID = null;
+  var auth = firebase.auth();
+  var db   = firebase.firestore();
+  var currentUID = null;
 
-  window._fbSignIn = function() {
-    const provider = new firebase.auth.GoogleAuthProvider();
-    auth.signInWithPopup(provider).catch(function(e){ console.error('Login error:',e); });
-  };
-
-  window._fbSignOut = function() {
-    auth.signOut().then(function(){
-      currentUID = null;
-      if(window._updateAuthUI) window._updateAuthUI(null);
+  // ── Serializar el plan: solo los campos necesarios, sin objetos Date ──
+  function serializePlan(plan){
+    return (plan||[]).map(function(p){
+      return {
+        idx:     p.idx,
+        status:  p.status  || 'pending',
+        time:    p.time    || 0,
+        notes:   p.notes   || {},
+        vicFall: p.vicFall || null
+      };
     });
-  };
+  }
 
-  window._fbSave = function(data) {
+  // ── GUARDAR en Firestore ──
+  window._fbSave = function(data){
     if(!currentUID) return;
-    var planLight = (data.plan||[]).map(function(p){
-      return {idx:p.idx, status:p.status, time:p.time||0, notes:p.notes||{}, vicFall:p.vicFall||null};
-    });
-    var toSave = {
-      prayers:   data.prayers   || [],
-      gratitud:  data.gratitud  || [],
-      momentos:  data.momentos  || [],
-      metas:     data.metas     || [],
-      victorias: data.victorias || [],
-      ayunos:    data.ayunos    || [],
-      moodLog:   data.moodLog   || [],
-      missions:  data.missions  || {},
-      chDone:    data.chDone    || {},
+    var payload = {
+      plan:         serializePlan(data.plan),
+      prayers:      data.prayers      || [],
+      gratitud:     data.gratitud     || [],
+      momentos:     data.momentos     || [],
+      metas:        data.metas        || [],
+      victorias:    data.victorias    || [],
+      ayunos:       data.ayunos       || [],
+      moodLog:      data.moodLog      || [],
+      missions:     data.missions     || {},
+      checks:       data.checks       || {},
+      chDone:       data.chDone       || {},
       commitChecks: data.commitChecks || {},
-      purity:    data.purity    || 0,
-      xp:        data.xp        || 0,
-      vic:       data.vic       || 0,
-      falls:     data.falls     || 0,
-      word:      data.word      || 'FE',
-      ayunoA:    data.ayunoA    || null,
-      plan:      planLight,
-      updatedAt: new Date().toISOString()
+      purity:       data.purity       || 0,
+      xp:           data.xp           || 0,
+      vic:          data.vic          || 0,
+      falls:        data.falls        || 0,
+      word:         data.word         || 'FE',
+      ayunoA:       data.ayunoA       || null,
+      updatedAt:    new Date().toISOString()
     };
-    db.collection('usuarios').doc(currentUID).set(toSave)
-      .then(function(){ if(window.showSyncIndicator) window.showSyncIndicator(); })
-      .catch(function(e){ console.error('Firestore save error:',e); });
+    db.collection('usuarios').doc(currentUID).set(payload)
+      .then(function(){
+        if(window.showSyncIndicator) window.showSyncIndicator();
+      })
+      .catch(function(e){
+        console.error('Firestore save error:', e);
+      });
   };
 
-  auth.onAuthStateChanged(function(user) {
-    if(user) {
-      currentUID = user.uid;
-      if(window._updateAuthUI) window._updateAuthUI(user);
-      // Load or create document
-      db.collection('usuarios').doc(currentUID).get().then(function(snap){
-        if(snap.exists) {
+  // ── CARGAR desde Firestore ──
+  function loadFromFirestore(uid){
+    db.collection('usuarios').doc(uid).get()
+      .then(function(snap){
+        if(snap.exists){
           if(window._fbLoadData) window._fbLoadData(snap.data());
         } else {
-          // First login — upload local data
+          // Primera vez: subir datos locales a la nube
           if(window._getS) window._fbSave(window._getS());
         }
-      }).catch(function(e){ console.error('Firestore load error:',e); });
+      })
+      .catch(function(e){
+        console.error('Firestore load error:', e);
+      });
+  }
+
+  // ── LOGIN con Google ──
+  window._fbSignIn = function(){
+    var provider = new firebase.auth.GoogleAuthProvider();
+    auth.signInWithPopup(provider)
+      .catch(function(e){
+        console.error('Login error:', e);
+        if(window.toast) toast('Error al iniciar sesión: ' + e.message);
+      });
+  };
+
+  // ── LOGOUT ──
+  window._fbSignOut = function(){
+    auth.signOut()
+      .then(function(){
+        currentUID = null;
+        localStorage.removeItem('fb_skipped');
+        if(window._updateAuthUI) window._updateAuthUI(null);
+        if(window.toast) toast('Sesión cerrada');
+      })
+      .catch(function(e){ console.error('Sign out error:', e); });
+  };
+
+  // ── OBSERVER: detecta cambios de sesión automáticamente ──
+  auth.onAuthStateChanged(function(user){
+    if(user){
+      currentUID = user.uid;
+      if(window._updateAuthUI) window._updateAuthUI(user);
+      loadFromFirestore(user.uid);
     } else {
       currentUID = null;
       if(window._updateAuthUI) window._updateAuthUI(null);
@@ -1226,7 +1262,7 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
       <div class="collapse-sec" id="cs3"><div class="collapse-head" onclick="toggleCollapse('cs3')"><span>💬 Reflexión</span><span class="collapse-arr">›</span></div><div class="collapse-body"><div class="form-group"><label class="form-label">¿Qué te habló Dios?</label><textarea class="form-textarea" id="m-god" placeholder="Lo que sentí que Dios me decía..."></textarea></div><div class="form-group"><label class="form-label">Aplicación concreta</label><input class="form-input" id="m-action" placeholder="Esta semana voy a..."/></div><div class="form-group"><label class="form-label">¿A quién puedo compartir esto?</label><input class="form-input" id="m-share" placeholder="Nombre o grupo..."/></div></div></div>
       <div class="collapse-sec" id="cs4"><div class="collapse-head" onclick="toggleCollapse('cs4')"><span>⚔️ Batalla espiritual</span><span class="collapse-arr">›</span></div><div class="collapse-body"><div class="form-group"><label class="form-label">Tentación</label><input class="form-input" id="m-temp" placeholder="¿Qué tentación enfrentaste?"/></div><div class="form-group"><label class="form-label">¿Cómo respondiste?</label><textarea class="form-textarea" id="m-resp" placeholder="Describe tu respuesta..."></textarea></div><div class="form-group"><label class="form-label">Resultado</label><div style="display:flex;gap:10px;margin-top:6px;"><label class="toggle-sw"><div class="sw" id="vic-toggle" onclick="toggleVicFall()"></div><span style="font-size:13px;color:var(--t2);" id="vic-fall-label">Pendiente</span></label></div></div><div class="form-group"><label class="form-label">Estrategia futura</label><textarea class="form-textarea" id="m-strat" placeholder="La próxima vez voy a..."></textarea></div></div></div>
     </div>
-    <div class="modal-foot"><small style="color:var(--t3);font-size:10px;flex:1;">Guardado localmente en este dispositivo</small><button class="btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn-gold" onclick="saveModal()">✦ Guardar</button></div>
+    <div class="modal-foot"><small style="color:var(--t3);font-size:10px;flex:1;" id="modal-save-hint">Guardado y sincronizado con la nube ✦</small><button class="btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn-gold" onclick="saveModal()">✦ Guardar</button></div>
   </div>
 </div>
 
@@ -1324,11 +1360,15 @@ const XPL=[{min:0,max:99,n:'Discípulo',ico:'📖'},{min:100,max:299,n:'Aprendiz
 
 // ==================== STATE ====================
 function load(){try{return JSON.parse(localStorage.getItem('eb365v5'))||{};}catch(e){return{};}}
+let _saveTimer=null;
 function save(){
-  // Always save to localStorage as backup
+  // Guardar siempre en localStorage como respaldo inmediato
   try{localStorage.setItem('eb365v5',JSON.stringify(S));}catch(e){}
-  // Also save to Firebase if logged in
-  if(window._fbSave) window._fbSave(S);
+  // Guardar en Firebase con debounce de 2s para evitar escrituras excesivas
+  clearTimeout(_saveTimer);
+  _saveTimer=setTimeout(function(){
+    if(window._fbSave) window._fbSave(S);
+  },2000);
 }
 // Called by Firebase when data loads from cloud
 window._getS = ()=>S;
